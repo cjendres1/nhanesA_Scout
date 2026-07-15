@@ -1,55 +1,55 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-
-# 1. Import necessary rpy2 conversion modules
 import rpy2.robjects as robjects
 from rpy2.robjects import pandas2ri
-from rpy2.robjects.conversion import localconverter
 
-# Create a combined converter for R default and Pandas
-# We define it globally, but we will call its context manager locally
-custom_converter = robjects.default_converter + pandas2ri.converter
+# Set up page layout
+st.set_page_config(page_title="NHANES Scout", layout="wide")
+st.title("🔎 NHANES Scout")
+st.caption("Powered by R package nhanesA & Python Streamlit")
 
 # -------------------------------------------------------------
-# 1. Initialize the R Bridge and Install nhanesA if missing
+# 1. Thread-Safe R Bridge Initializer (rpy2 <= 3.5.1)
 # -------------------------------------------------------------
 @st.cache_resource
 def init_r_bridge():
-    """Installs nhanesA safely and silently in a non-interactive container."""
     from rpy2.robjects.packages import importr, isinstalled
-    import rpy2.robjects as robjects
-
+    
+    # Activate automatic R-to-Pandas dataframe conversion
+    pandas2ri.activate()
+    
+    # Install nhanesA silently if it's missing
     if not isinstalled('nhanesA'):
-        # 1. Import R's core 'utils' package
         utils = importr('utils')
-        
-        # 2. Force install nhanesA non-interactively
-        # - repos: Hardcodes the cloud mirror to bypass the interactive prompt
-        # - dependencies=True: Ensures it pulls in any missing helper packages
-        # - INSTALL_opts="--no-multiarch": Speeds up installation on Linux
         utils.install_packages(
             'nhanesA', 
             repos='https://cloud.r-project.org', 
             dependencies=True
         )
-        
     return importr('nhanesA')
 
+# Safe initialization
+try:
+    nhanes = init_r_bridge()
+    st.success("🎉 R-to-Python Bridge Connected Successfully!")
+except Exception as e:
+    st.error(f"❌ Failed to load R bridge: {e}")
+    st.stop()
+
 # -------------------------------------------------------------
-# 2. Data Fetching (Using Thread-Safe Context Manager)
+# 2. Interactive Test (Query Table Metadata)
 # -------------------------------------------------------------
-@st.cache_data
-def fetch_nhanes_table(table_name):
-    """Calls nhanesA R function and returns a clean Pandas DataFrame."""
-    
-    # Wrapping everything in the custom_converter context ensures that 
-    # Streamlit's threads always know how to translate R objects to Pandas.
-    with custom_converter.context():
-        # 1. Get the raw R object using your package
-        r_data = nhanes.nhanes(table_name)
-        
-        # 2. Convert R dataframe to Pandas DataFrame
-        pd_df = robjects.conversion.get_conversion().rpy2py(r_data)
-        
-    return pd_df
+st.write("### Test Connection")
+if st.button("Query NHANES table metadata"):
+    with st.spinner("Calling R `nhanesA::nhanesManifest`..."):
+        try:
+            # Query a simple metadata table
+            r_data = nhanes.nhanesManifest("DEMO")
+            
+            # Convert the R dataframe to Pandas
+            pd_df = pandas2ri.rpy2py(r_data)
+            
+            st.write("Returned Tables:")
+            st.dataframe(pd_df.head(10))
+        except Exception as e:
+            st.error(f"Error querying table metadata: {e}")
