@@ -16,24 +16,25 @@ custom_converter = robjects.default_converter + pandas2ri.converter
 # -------------------------------------------------------------
 @st.cache_resource
 def init_r_bridge():
-    """Installs nhanesA in the container and imports rpy2 modules."""
+    """Installs nhanesA safely and silently in a non-interactive container."""
     from rpy2.robjects.packages import importr, isinstalled
-    
-    # Check if nhanesA is installed; if not, install it
+    import rpy2.robjects as robjects
+
     if not isinstalled('nhanesA'):
+        # 1. Import R's core 'utils' package
         utils = importr('utils')
-        utils.chooseCRANmirror(ind=1) # Select first cloud mirror
-        utils.install_packages('nhanesA')
+        
+        # 2. Force install nhanesA non-interactively
+        # - repos: Hardcodes the cloud mirror to bypass the interactive prompt
+        # - dependencies=True: Ensures it pulls in any missing helper packages
+        # - INSTALL_opts="--no-multiarch": Speeds up installation on Linux
+        utils.install_packages(
+            'nhanesA', 
+            repos='https://cloud.r-project.org', 
+            dependencies=True
+        )
         
     return importr('nhanesA')
-
-# Load your package inside the default converter context
-try:
-    with custom_converter.context(): # Force context variables into Streamlit's thread
-        nhanes = init_r_bridge()
-except Exception as e:
-    st.error(f"Failed to load R bridge: {e}")
-    st.stop()
 
 # -------------------------------------------------------------
 # 2. Data Fetching (Using Thread-Safe Context Manager)
