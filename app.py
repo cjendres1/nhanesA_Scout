@@ -68,11 +68,9 @@ if embeddings is None or vectorizer_model is None:
 # Build a fast-lookup set of RDC (Research Data Center) restricted tables
 rdc_tables = set()
 for df in [df_tables, df_vars]:
-    # Look for any constraint column
     constraint_col = [col for col in df.columns if 'CONSTRAINT' in col]
     if constraint_col:
         col_name = constraint_col[0]
-        # Identify tables flagged with restrictions
         restricted = df[df[col_name].astype(str).str.lower().str.contains('rdc|limited|restrict|secure', na=False)]
         if 'TABLE' in restricted.columns:
             rdc_tables.update(restricted['TABLE'].unique())
@@ -85,7 +83,7 @@ st.sidebar.header("⚙️ Search Controls")
 search_type = st.sidebar.selectbox(
     "Search Type:",
     options=["Semantic Search (AI Concept Matching)", "Literal Search (Exact Keywords)"],
-    help="Semantic Search leverages the mathematical vector relationships to find similar concepts, even if spelled differently."
+    help="Semantic Search leverages vector relationships to find similar concepts, even if spelled differently."
 )
 
 # Configurable minimum similarity threshold
@@ -96,7 +94,16 @@ similarity_threshold = st.sidebar.slider(
     value=0.30,
     step=0.05,
     disabled=(search_type == "Literal Search (Exact Keywords)"),
-    help="Adjust how strictly the semantic search engine matches concepts. Higher scores yield fewer, more precise matches."
+    help="Adjust how strictly the semantic search engine matches concepts."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔒 Restricted Data Settings")
+# Persistent checkbox to control display of RDC-only tables (defaults to False)
+show_rdc = st.sidebar.checkbox(
+    "Display RDC-only tables", 
+    value=False,
+    help="Show restricted Research Data Center tables in search results."
 )
 
 st.write("### 🔎 Step 1: Search Variable Metadata")
@@ -113,11 +120,9 @@ matched_vars = pd.DataFrame()
 # 3. Search & Filter Engine (Smart Phrasing & Comma Separation)
 # -------------------------------------------------------------
 if search_input.strip():
-    # Dynamic column identification to prevent errors if names differ
     var_col = 'VARNAME' if 'VARNAME' in df_vars.columns else ('VARIABLE' if 'VARIABLE' in df_vars.columns else df_vars.columns[0])
     desc_col = 'VARDESC' if 'VARDESC' in df_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in df_vars.columns else df_vars.columns[1])
     
-    # Clean up and split the user's input by commas
     raw_concepts = search_input.split(",")
     search_concepts = [concept.strip().replace('"', '').replace("'", "") for concept in raw_concepts if concept.strip()]
     
@@ -127,18 +132,14 @@ if search_input.strip():
     if search_type == "Semantic Search (AI Concept Matching)":
         with st.spinner("Analyzing semantics..."):
             for concept in search_concepts:
-                # Convert user query to sparse representation
                 query_vector = vectorizer_model.transform([concept])
                 
-                # High-speed cosine similarity on sparse structures
                 from sklearn.preprocessing import normalize
                 normalized_embeddings = normalize(embeddings, norm='l2', axis=1)
                 normalized_query = normalize(query_vector, norm='l2', axis=1)
                 
-                # Dot product of sparse matrices is incredibly fast
                 similarities = (normalized_embeddings * normalized_query.T).toarray().squeeze()
                 
-                # Filter variables that hit the user's chosen threshold
                 matching_indices = np.where(similarities >= similarity_threshold)[0]
                 
                 if len(matching_indices) > 0:
@@ -148,7 +149,6 @@ if search_input.strip():
                     matched_vars_by_concept.append(concept_df)
                     
         if matched_vars_by_concept:
-            # Drop duplicates if a variable matched multiple semantic targets
             matched_vars = pd.concat(matched_vars_by_concept).drop_duplicates(subset=['TABLE', var_col])
         else:
             matched_vars = pd.DataFrame()
@@ -193,55 +193,63 @@ if not matched_vars.empty:
     # Tag rows if their corresponding table is restricted
     matched_vars['RDC_ONLY'] = matched_vars['TABLE'].isin(rdc_tables)
     
-    # Report performance stats
-    distinct_tables_count = matched_vars['TABLE'].nunique()
+    # Count RDC matches before we potentially filter them out
     rdc_match_count = matched_vars[matched_vars['RDC_ONLY'] == True]['TABLE'].nunique()
     
-    st.success(
-        f"Found **{len(matched_vars)}** matching variables across **{distinct_tables_count}** distinct tables!"
-    )
+    # Filter the DataFrame based on the sidebar setting
+    if not show_rdc:
+        matched_vars = matched_vars[matched_vars['RDC_ONLY'] == False]
     
-    # Inform users about visual cues
-    if rdc_match_count > 0:
-        st.info(
-            f"⚠️ **Note:** {rdc_match_count} table(s) require Research Data Center (RDC) access and are highlighted in **red**. "
-            "These restricted tables cannot be downloaded or included in the auto-generated code snippet."
+    # Display the concise warning in the sidebar if showing RDC tables and matches exist
+    if show_rdc and rdc_match_count > 0:
+        st.sidebar.warning(
+            "⚠️ **Note:** Tables that require Research Data Center (RDC) access (highlighted in red) "
+            "will not be included in the auto-generated code snippet."
         )
 
-    # Sort results to place best semantic hits at the top
-    if 'SIMILARITY' in matched_vars.columns:
-        matched_vars = matched_vars.sort_values(by='SIMILARITY', ascending=False)
-    
-    # Filter selection checklist to only show non-RDC downloadable tables
-    unique_tables = sorted(matched_vars['TABLE'].unique())
-    downloadable_tables = [t for t in unique_tables if t not in rdc_tables]
-    
-    selected_tables = st.multiselect(
-        "Choose NHANES tables to bundle into download package:",
-        options=downloadable_tables,
-        default=downloadable_tables[:5] if len(downloadable_tables) > 0 else []
-    )
-    
-    # Apply soft-red conditional styling to the dataframe row if it is RDC_ONLY
-    def style_rdc_rows(row):
-        color = 'background-color: #ffebee' if row['RDC_ONLY'] else ''
-        return [color] * len(row)
-    
-    styled_df = matched_vars.style.apply(style_rdc_rows, axis=1)
-    
-    # Display styled dataframe, hiding the control columns (USECONSTRAINTS & RDC_ONLY)
-    hide_cols = {
-        "RDC_ONLY": None,
-        "USECONSTRAINTS": None,
-        "CONSTRAINTS": None
-    }
-    
-    st.dataframe(
-        styled_df, 
-        use_container_width=True, 
-        hide_index=True,
-        column_config=hide_cols
-    )
+    # Re-evaluate empty check after potential filter
+    if not matched_vars.empty:
+        distinct_tables_count = matched_vars['TABLE'].nunique()
+        st.success(
+            f"Found **{len(matched_vars)}** matching variables across **{distinct_tables_count}** distinct tables!"
+        )
+
+        # Sort results to place best semantic hits at the top
+        if 'SIMILARITY' in matched_vars.columns:
+            matched_vars = matched_vars.sort_values(by='SIMILARITY', ascending=False)
+        
+        # Build selection list excluding RDC tables completely
+        unique_tables = sorted(matched_vars['TABLE'].unique())
+        downloadable_tables = [t for t in unique_tables if t not in rdc_tables]
+        
+        selected_tables = st.multiselect(
+            "Choose NHANES tables to bundle into download package:",
+            options=downloadable_tables,
+            default=downloadable_tables[:5] if len(downloadable_tables) > 0 else []
+        )
+        
+        # Apply soft-red conditional styling to RDC rows
+        def style_rdc_rows(row):
+            color = 'background-color: #ffebee' if row['RDC_ONLY'] else ''
+            return [color] * len(row)
+        
+        styled_df = matched_vars.style.apply(style_rdc_rows, axis=1)
+        
+        # Display styled dataframe, hiding the control columns
+        hide_cols = {
+            "RDC_ONLY": None,
+            "USECONSTRAINTS": None,
+            "CONSTRAINTS": None
+        }
+        
+        st.dataframe(
+            styled_df, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config=hide_cols
+        )
+    else:
+        st.warning("All matches require RDC authorization. Adjust 'Display RDC-only tables' in the sidebar to view them.")
 else:
     if search_input.strip():
         st.warning("No variables matched your search parameters.")
@@ -253,30 +261,24 @@ if selected_tables:
     st.write("---")
     st.write("### 📦 Step 2: Configure Bundle & Retrieve")
     
-    # Option: Include demographics table automatically
     include_demos = st.checkbox(
         "💡 **Auto-include corresponding Demographics tables**", 
         value=True,
-        help="Recommended. This auto-resolves the demographics table for each selected table's cycle so you can merge them on 'SEQN' later."
+        help="Recommended. This auto-resolves the demographics table for each selected table's cycle so you can merge them later."
     )
     
-    # Build final list of tables to download
     final_download_list = list(selected_tables)
     
     if include_demos:
         demo_additions = []
-        # Find which years/cycles the selected tables belong to
         for table in selected_tables:
-            # Match the row in the table catalog to find the cycle year
             row = df_tables[df_tables['TABLE'] == table]
             if not row.empty:
                 begin_year = int(row.iloc[0]['BEGINYEAR'])
-                # Map starting year to standard NHANES demographics table naming
-                # 1999 -> DEMO, 2001 -> DEMO_B, 2003 -> DEMO_C, etc.
                 if begin_year == 1999:
                     demo_table = "DEMO"
                 else:
-                    cycle_letter = chr(65 + int((begin_year - 1999) / 2)) # Converts years to _B, _C, etc.
+                    cycle_letter = chr(65 + int((begin_year - 1999) / 2))
                     demo_table = f"DEMO_{cycle_letter}"
                 
                 if demo_table not in final_download_list and demo_table not in demo_additions:
@@ -286,15 +288,12 @@ if selected_tables:
         if demo_additions:
             st.info(f"Adding demographic baselines: `{', '.join(demo_additions)}`")
 
-    # Display final queue
     st.write("**Your Final Data Package List:**")
     st.code(", ".join(final_download_list))
     
-    # Generate the Easy Python Retrieval Code
     st.write("#### 🐍 Step 3: Copy Code to Python")
     st.write("Because the CDC servers limit Streamlit web-scraping speed, use this optimized snippet to load these files directly into your local Python environment:")
     
-    # Generate copy-pasteable script utilizing pd.read_sas or a wrapper
     python_snippet = f"""import pandas as pd
 
 # List of NHANES tables identified via NHANES Scout
@@ -304,15 +303,12 @@ def fetch_nhanes_tables(table_list):
     datasets = {{}}
     for table in table_list:
         print(f"Downloading table: {{table}}...")
-        # NHANES tables are hosted as SAS Transport (.XPT) files on the CDC website
         url = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{table[:4]}}/{{table}}.XPT"
         try:
             datasets[table] = pd.read_sas(url)
             print(f" -> Loaded {{len(datasets[table])}} rows.")
         except Exception as e:
-            # Fallback if table name format is slightly different on CDC
             try:
-                # Some tables reside in the root demographics directory
                 url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{{table}}.XPT"
                 datasets[table] = pd.read_sas(url_alt)
                 print(f" -> Loaded {{len(datasets[table])}} rows (alternative path).")
@@ -320,11 +316,6 @@ def fetch_nhanes_tables(table_list):
                 print(f" ❌ Error fetching {{table}}: {{alt_err}}")
     return datasets
 
-# Fetch all selected tables instantly
 nhanes_data = fetch_nhanes_tables(tables_to_load)
-
-# Example: Inspecting one of the loaded DataFrames
-# first_table = list(nhanes_data.keys())[0]
-# print(nhanes_data[first_table].head())
 """
     st.code(python_snippet, language="python")
