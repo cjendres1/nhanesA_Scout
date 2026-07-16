@@ -34,7 +34,7 @@ if df_tables is None or df_vars is None:
     st.stop()
 
 # -------------------------------------------------------------
-# 2. Search & Filter Engine (Deduplicated with Match Counts)
+# 2. Search & Filter Engine (Deduplicated with Strict Unique Match Counts)
 # -------------------------------------------------------------
 st.write("### 🔍 Step 1: Search the NHANES Universe")
 search_term = st.text_input(
@@ -47,7 +47,7 @@ if search_term.strip():
     # Clean the search term
     term = search_term.strip().lower()
     
-    # Locate the correct column names dynamically (handling VARNAME vs VARIABLE, etc.)
+    # Locate the correct column names dynamically
     var_col = 'VARNAME' if 'VARNAME' in df_vars.columns else ('VARIABLE' if 'VARIABLE' in df_vars.columns else df_vars.columns[0])
     desc_col = 'VARDESC' if 'VARDESC' in df_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in df_vars.columns else df_vars.columns[1])
     
@@ -58,10 +58,10 @@ if search_term.strip():
     ].copy()
     
     if not matched_vars.empty:
-        # 2. Count ONLY the filtered variables per table
-        match_counts = matched_vars.groupby('TABLE').size().reset_index(name='MATCH_COUNT')
+        # 2. Count ONLY the UNIQUE variable names matching per table (resolves the duplicate metadata count)
+        match_counts = matched_vars.groupby('TABLE')[var_col].nunique().reset_index(name='MATCH_COUNT')
         
-        # 3. Get unique tables and merge with the strict match counts
+        # 3. Get unique tables and merge with the strict unique match counts
         unique_tables_catalog = df_tables.drop_duplicates(subset=['TABLE']).copy()
         matched_tables_df = unique_tables_catalog.merge(match_counts, on='TABLE', how='inner')
         
@@ -84,7 +84,7 @@ if search_term.strip():
                 "TABLE": "Table Code",
                 "MATCH_COUNT": st.column_config.NumberColumn(
                     "Matching Variables Found",
-                    help="The exact number of variables in this table that matched your search term.",
+                    help="The exact number of unique variables in this table that matched your search term.",
                     format="%d ⭐"
                 ),
                 "TABLEDESC": "Description / Title",
@@ -96,12 +96,13 @@ if search_term.strip():
         
         selected_tables = edited_df[edited_df["Select"] == True]["TABLE"].tolist()
         
-        # --- NEW UX FEATURE: Show Exactly WHAT Matched ---
+        # --- View Exactly WHAT Matched ---
         st.write("---")
         with st.expander("👁️ View exactly which variables matched your search in each table"):
             for table_code in matched_tables_df['TABLE'].unique():
-                table_specific_matches = matched_vars[matched_vars['TABLE'] == table_code]
-                st.markdown(f"**`{table_code}`** ({len(table_specific_matches)} match(es)):")
+                # Extract and deduplicate the variable names displayed in the expander too
+                table_specific_matches = matched_vars[matched_vars['TABLE'] == table_code].drop_duplicates(subset=[var_col])
+                st.markdown(f"**`{table_code}`** ({len(table_specific_matches)} unique match(es)):")
                 st.dataframe(
                     table_specific_matches[[var_col, desc_col]], 
                     use_container_width=True,
