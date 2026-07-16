@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import rpy2.robjects as robjects
-from rpy2.robjects import pandas2ri
 
 # Set up page layout
 st.set_page_config(page_title="NHANES Scout", layout="wide")
@@ -10,7 +8,7 @@ st.title("🔎 NHANES Scout")
 st.caption("Powered by R package nhanesA & Python Streamlit")
 
 # -------------------------------------------------------------
-# 1. Thread-Safe R Bridge Initializer (rpy2 <= 3.5.1)
+# 1. Thread-Safe R Bridge Initializer
 # -------------------------------------------------------------
 @st.cache_resource
 def init_r_bridge():
@@ -79,3 +77,4 @@ if st.button("Query NHANES table metadata"):
             
         except Exception as e:
             st.error(f"Error querying table metadata: {e}")
+            
