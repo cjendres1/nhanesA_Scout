@@ -2,83 +2,122 @@ import streamlit as st
 import pandas as pd
 import os
 
-# Set up page layout
-st.set_page_config(page_title="NHANES Scout", layout="wide")
+# Set up clean, wide layout
+st.set_page_config(
+    page_title="NHANES Scout",
+    page_icon="🔎",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 st.title("🔎 NHANES Scout")
-st.caption("Powered by R package nhanesA & Python Streamlit")
+st.caption("A lightning-fast, offline-first explorer for NHANES Demographics metadata.")
 
 # -------------------------------------------------------------
-# 1. Thread-Safe R Bridge Initializer
+# 1. High-Performance Data Loaders
 # -------------------------------------------------------------
-@st.cache_resource
-def init_r_bridge():
-    """Installs nhanesA safely into a user-writable directory on Streamlit Cloud."""
-    from rpy2.robjects.packages import importr, isinstalled
-    import os
-
-    # Define a local, writable directory in the user's home folder for R packages
-    user_home = os.path.expanduser("~")
-    r_libs_path = os.path.join(user_home, "R", "library")
+@st.cache_data
+def load_manifests():
+    """Loads cached NHANES metadata files from the repository."""
+    # Check if files exist, handling both potential extension cases
+    demo_path = "cache_demo_manifest.csv"
+    vars_path = "cache_variables_manifest.csv"
     
-    if not os.path.exists(r_libs_path):
-        os.makedirs(r_libs_path)
+    # Fallback to look in the current directory if they are named without extensions locally
+    if not os.path.exists(demo_path) and os.path.exists("cache_demo_manifest"):
+        demo_path = "cache_demo_manifest"
+    if not os.path.exists(vars_path) and os.path.exists("cache_variables_manifest"):
+        vars_path = "cache_variables_manifest"
+
+    try:
+        df_demo = pd.read_csv(demo_path)
+        df_vars = pd.read_csv(vars_path)
+        return df_demo, df_vars
+    except Exception as e:
+        st.error(f"Error loading cache files: {e}")
+        return None, None
+
+# Load datasets
+df_demo, df_vars = load_manifests()
+
+if df_demo is None or df_vars is None:
+    st.warning("⚠️ Cache files not detected. Please ensure 'cache_demo_manifest.csv' and 'cache_variables_manifest.csv' are pushed to your GitHub repository root.")
+    st.stop()
+
+# -------------------------------------------------------------
+# 2. Sidebar Navigation & Global Stats
+# -------------------------------------------------------------
+with st.sidebar:
+    st.header("📊 Database Stats")
+    st.metric("Total Demographics Tables", f"{df_demo['Table'].nunique()}")
+    st.metric("Total Indexed Variables", f"{len(df_vars):,}")
+    
+    st.write("---")
+    st.markdown(
+        """
+        **About NHANES Scout**
+        This tool provides instantaneous exploration of NHANES demographic tables. 
+        Because it runs entirely on local pre-cached metadata, it remains 100% operational even when the CDC servers are down.
+        """
+    )
+
+# -------------------------------------------------------------
+# 3. Main Dashboard UI
+# -------------------------------------------------------------
+tab1, tab2 = st.tabs(["📂 Tables Directory", "🔑 Variable Explorer"])
+
+# --- TAB 1: TABLES DIRECTORY ---
+with tab1:
+    st.subheader("Demographics Tables Manifest")
+    st.write("Browse all historical demographic cycles found in the `nhanesA` metadata:")
+    
+    # Clean up column displays if needed and show interactive table
+    st.dataframe(
+        df_demo, 
+        use_container_width=True,
+        column_config={
+            "Table": "Table Code",
+            "TableDesc": "Description",
+            "BeginYear": "Start Year",
+            "EndYear": "End Year"
+        }
+    )
+
+# --- TAB 2: VARIABLE EXPLORER ---
+with tab2:
+    st.subheader("Variable Inspector")
+    
+    # Create dropdown to choose which table to inspect
+    available_tables = sorted(df_demo['Table'].unique())
+    selected_table = st.selectbox(
+        "Select an NHANES Demographic Table to inspect its variables:",
+        options=available_tables,
+        index=len(available_tables) - 1  # Default to the most recent cycle
+    )
+    
+    # Filter variables on the fly
+    filtered_vars = df_vars[df_vars['Table'] == selected_table].copy()
+    
+    # Fallback to match case/column name variations if R exported slightly different headers
+    if filtered_vars.empty and 'SourceTable' in df_vars.columns:
+        filtered_vars = df_vars[df_vars['SourceTable'] == selected_table].copy()
         
-    os.environ["R_LIBS_USER"] = r_libs_path
+    st.write(f"Showing variables present in **`{selected_table}`**:")
     
-    # Install nhanesA if missing (dependencies are skipped as they are installed via apt-get)
-    if not isinstalled('nhanesA', lib_loc=r_libs_path):
-        utils = importr('utils')
-        utils.install_packages(
-            'nhanesA', 
-            lib=r_libs_path,
-            repos='https://cloud.r-project.org', 
-            dependencies=False  # Crucial: Keeps R from trying to compile system packages
+    # Display the variable details
+    if not filtered_vars.empty:
+        st.metric("Variables in this Table", len(filtered_vars))
+        
+        # Selectable/searchable data grid of the variables
+        st.dataframe(
+            filtered_vars, 
+            use_container_width=True,
+            column_config={
+                "Variable": "Variable Name",
+                "VarName": "Variable Name",
+                "Description": "Detailed Label/Description",
+                "VarDesc": "Detailed Label/Description"
+            }
         )
-        
-    return importr('nhanesA', lib_loc=r_libs_path)
-    
-# -------------------------------------------------------------
-# 2. Interactive Test (Query Table Metadata with CDC Fallback)
-# -------------------------------------------------------------
-st.write("### Test Connection")
-st.info("💡 Note: NHANES metadata is fetched live from the CDC. If the CDC servers are down or slow, the app will load fallback mock data.")
-
-if st.button("Query NHANES table metadata"):
-    with st.spinner("Attempting to connect to CDC via R `nhanesA`..."):
-        success = False
-        pd_df = None
-        
-        try:
-            # We use localconverter(custom_converter) for safe translations
-            with localconverter(custom_converter) as cv:
-                # Set an R-level option to prevent infinite waiting if possible
-                # Fetch R data
-                r_data = nhanes.nhanesManifest("DEMO")
-                # Convert the resulting R dataframe to Pandas
-                pd_df = robjects.conversion.get_conversion().rpy2py(r_data)
-                success = True
-                st.success("🎉 Successfully retrieved live data from CDC servers!")
-                
-        except Exception as e:
-            st.warning(f"⚠️ CDC servers are currently unreachable or slow. Loading offline fallback data...")
-            # Create a mock demographics table so you can keep testing your app's UI
-            pd_df = pd.DataFrame({
-                'Table': ['DEMO_A', 'DEMO_B', 'DEMO_C', 'DEMO_D', 'DEMO_E', 'DEMO_F', 'DEMO_G', 'DEMO_H'],
-                'TableDesc': [
-                    'Demographic Variables (1999-2000)',
-                    'Demographic Variables (2001-2002)',
-                    'Demographic Variables (2003-2004)',
-                    'Demographic Variables (2005-2006)',
-                    'Demographic Variables (2007-2008)',
-                    'Demographic Variables (2009-2010)',
-                    'Demographic Variables (2011-2012)',
-                    'Demographic Variables (2013-2014)'
-                ],
-                'BeginYear': [1999, 2001, 2003, 2005, 2007, 2009, 2011, 2013],
-                'EndYear': [2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014]
-            })
-
-        # Display the resulting dataframe (either live or fallback)
-        if pd_df is not None:
-            st.write("### Demographic Tables Manifest")
-            st.dataframe(pd_df, use_container_width=True)
+    else:
+        st.info(f"No variables found matching table code `{selected_table}` in cache.")
