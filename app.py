@@ -65,25 +65,46 @@ if embeddings is None or vectorizer_model is None:
     st.error("⚠️ Semantic search files ('cache_vector_embeddings.npz' and 'cache_vectorizer.pkl') not detected.")
     st.stop()
 
+# Build a fast-lookup set of RDC (Research Data Center) restricted tables
+rdc_tables = set()
+for df in [df_tables, df_vars]:
+    # Look for any constraint column
+    constraint_col = [col for col in df.columns if 'CONSTRAINT' in col]
+    if constraint_col:
+        col_name = constraint_col[0]
+        # Identify tables flagged with restrictions
+        restricted = df[df[col_name].astype(str).str.lower().str.contains('rdc|limited|restrict|secure', na=False)]
+        if 'TABLE' in restricted.columns:
+            rdc_tables.update(restricted['TABLE'].unique())
+
 # -------------------------------------------------------------
-# 2. Search Inputs & Configurations
+# 2. Search Inputs & Configurations (With Sidebar Controls)
 # -------------------------------------------------------------
+st.sidebar.header("⚙️ Search Controls")
+
+search_type = st.sidebar.selectbox(
+    "Search Type:",
+    options=["Semantic Search (AI Concept Matching)", "Literal Search (Exact Keywords)"],
+    help="Semantic Search leverages the mathematical vector relationships to find similar concepts, even if spelled differently."
+)
+
+# Configurable minimum similarity threshold
+similarity_threshold = st.sidebar.slider(
+    "Min Similarity Score",
+    min_value=0.2,
+    max_value=0.8,
+    value=0.30,
+    step=0.05,
+    disabled=(search_type == "Literal Search (Exact Keywords)"),
+    help="Adjust how strictly the semantic search engine matches concepts. Higher scores yield fewer, more precise matches."
+)
+
 st.write("### 🔎 Step 1: Search Variable Metadata")
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    search_input = st.text_input(
-        "Enter keywords or search concepts (comma-separated for multi-term queries):",
-        placeholder="e.g., blood pressure, mercury, diabetes, age",
-        help="Use commas to search for multiple concepts at once."
-    )
-
-with col2:
-    search_type = st.selectbox(
-        "Search Type:",
-        options=["Semantic Search (AI Concept Matching)", "Literal Search (Exact Keywords)"],
-        help="Semantic Search leverages the mathematical vector relationships to find similar concepts, even if spelled differently."
-    )
+search_input = st.text_input(
+    "Enter keywords or search concepts (comma-separated for multi-term queries):",
+    placeholder="e.g., blood pressure, mercury, diabetes, age",
+    help="Use commas to search for multiple concepts at once."
+)
 
 # Establish matching dataframe container
 matched_vars = pd.DataFrame()
@@ -117,9 +138,8 @@ if search_input.strip():
                 # Dot product of sparse matrices is incredibly fast
                 similarities = (normalized_embeddings * normalized_query.T).toarray().squeeze()
                 
-                # Filter variables that hit at least a 15% similarity score
-                threshold = 0.15
-                matching_indices = np.where(similarities >= threshold)[0]
+                # Filter variables that hit the user's chosen threshold
+                matching_indices = np.where(similarities >= similarity_threshold)[0]
                 
                 if len(matching_indices) > 0:
                     concept_df = df_vars.iloc[matching_indices].copy()
@@ -170,25 +190,58 @@ if search_input.strip():
 # -------------------------------------------------------------
 selected_tables = []
 if not matched_vars.empty:
-    st.success(f"Found {len(matched_vars)} matching variable indicators!")
+    # Tag rows if their corresponding table is restricted
+    matched_vars['RDC_ONLY'] = matched_vars['TABLE'].isin(rdc_tables)
     
-    # Sort results to place best semantic hits at the top if similarity scores are present
+    # Report performance stats
+    distinct_tables_count = matched_vars['TABLE'].nunique()
+    rdc_match_count = matched_vars[matched_vars['RDC_ONLY'] == True]['TABLE'].nunique()
+    
+    st.success(
+        f"Found **{len(matched_vars)}** matching variables across **{distinct_tables_count}** distinct tables!"
+    )
+    
+    # Inform users about visual cues
+    if rdc_match_count > 0:
+        st.info(
+            f"⚠️ **Note:** {rdc_match_count} table(s) require Research Data Center (RDC) access and are highlighted in **red**. "
+            "These restricted tables cannot be downloaded or included in the auto-generated code snippet."
+        )
+
+    # Sort results to place best semantic hits at the top
     if 'SIMILARITY' in matched_vars.columns:
         matched_vars = matched_vars.sort_values(by='SIMILARITY', ascending=False)
     
-    # Show search results inside a dynamic data editor
-    st.write("#### Select which tables to include in your data package:")
-    
-    # Create interactive selection column mapping unique table names
+    # Filter selection checklist to only show non-RDC downloadable tables
     unique_tables = sorted(matched_vars['TABLE'].unique())
+    downloadable_tables = [t for t in unique_tables if t not in rdc_tables]
+    
     selected_tables = st.multiselect(
-        "Choose NHANES tables to bundle:",
-        options=unique_tables,
-        default=unique_tables[:5] if len(unique_tables) > 0 else [] # Default-select first few
+        "Choose NHANES tables to bundle into download package:",
+        options=downloadable_tables,
+        default=downloadable_tables[:5] if len(downloadable_tables) > 0 else []
     )
     
-    # Render table preview
-    st.dataframe(matched_vars, use_container_width=True, hide_index=True)
+    # Apply soft-red conditional styling to the dataframe row if it is RDC_ONLY
+    def style_rdc_rows(row):
+        color = 'background-color: #ffebee' if row['RDC_ONLY'] else ''
+        return [color] * len(row)
+    
+    styled_df = matched_vars.style.apply(style_rdc_rows, axis=1)
+    
+    # Display styled dataframe, hiding the control columns (USECONSTRAINTS & RDC_ONLY)
+    hide_cols = {
+        "RDC_ONLY": None,
+        "USECONSTRAINTS": None,
+        "CONSTRAINTS": None
+    }
+    
+    st.dataframe(
+        styled_df, 
+        use_container_width=True, 
+        hide_index=True,
+        column_config=hide_cols
+    )
 else:
     if search_input.strip():
         st.warning("No variables matched your search parameters.")
