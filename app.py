@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
+import pickle
+from scipy.sparse import load_npz
 
 # Page setup
 st.set_page_config(page_title="NHANES Scout", page_icon="🔎", layout="wide")
@@ -10,22 +13,83 @@ st.caption("Locate any NHANES tables based on search terms, bundle demographics,
 # -------------------------------------------------------------
 # 1. High-Performance Caching Loaders
 # -------------------------------------------------------------
-# Import this at the very top of your app.py along with other libraries
-from scipy.sparse import load_npz, csr_matrix
+@st.cache_resource
+def load_semantic_model():
+    """Loads the pre-fitted Scikit-Learn vectorizer model."""
+    pkl_path = "cache_vectorizer.pkl"
+    if os.path.exists(pkl_path):
+        with open(pkl_path, "rb") as f:
+            return pickle.load(f)
+    return None
+
+@st.cache_data
+def load_global_manifests(demo_mtime, vars_mtime):
+    demo_path = "cache_demo_manifest.csv"
+    vars_path = "cache_variables_manifest.csv"
+    
+    if not os.path.exists(demo_path) or not os.path.exists(vars_path):
+        return None, None
+        
+    df_tables = pd.read_csv(demo_path)
+    df_vars = pd.read_csv(vars_path)
+    
+    # Standardize column naming to upper-case
+    df_tables.columns = [col.upper() for col in df_tables.columns]
+    df_vars.columns = [col.upper() for col in df_vars.columns]
+    
+    return df_tables, df_vars
 
 @st.cache_data
 def load_vector_embeddings(emb_mtime):
-    # Change target file extension to .npz
     emb_path = "cache_vector_embeddings.npz"
     if os.path.exists(emb_path):
         return load_npz(emb_path)
     return None
 
-# Update modification tracking file target at the bottom of Section 1:
+# Manage file modification times for auto-cache busting
+demo_mtime = os.path.getmtime("cache_demo_manifest.csv") if os.path.exists("cache_demo_manifest.csv") else 0
+vars_mtime = os.path.getmtime("cache_variables_manifest.csv") if os.path.exists("cache_variables_manifest.csv") else 0
 emb_mtime = os.path.getmtime("cache_vector_embeddings.npz") if os.path.exists("cache_vector_embeddings.npz") else 0
 
+# Load datasets and vector indexes
+df_tables, df_vars = load_global_manifests(demo_mtime, vars_mtime)
+embeddings = load_vector_embeddings(emb_mtime)
+vectorizer_model = load_semantic_model()
+
+# Verify that resources were successfully loaded
+if df_tables is None or df_vars is None:
+    st.error("⚠️ Local data cache files ('cache_demo_manifest.csv' and 'cache_variables_manifest.csv') not detected.")
+    st.stop()
+
+if embeddings is None or vectorizer_model is None:
+    st.error("⚠️ Semantic search files ('cache_vector_embeddings.npz' and 'cache_vectorizer.pkl') not detected.")
+    st.stop()
+
 # -------------------------------------------------------------
-# 2. Search & Filter Engine (Smart Phrasing & Comma Separation)
+# 2. Search Inputs & Configurations
+# -------------------------------------------------------------
+st.write("### 🔎 Step 1: Search Variable Metadata")
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    search_input = st.text_input(
+        "Enter keywords or search concepts (comma-separated for multi-term queries):",
+        placeholder="e.g., blood pressure, mercury, diabetes, age",
+        help="Use commas to search for multiple concepts at once."
+    )
+
+with col2:
+    search_type = st.selectbox(
+        "Search Type:",
+        options=["Semantic Search (AI Concept Matching)", "Literal Search (Exact Keywords)"],
+        help="Semantic Search leverages the mathematical vector relationships to find similar concepts, even if spelled differently."
+    )
+
+# Establish matching dataframe container
+matched_vars = pd.DataFrame()
+
+# -------------------------------------------------------------
+# 3. Search & Filter Engine (Smart Phrasing & Comma Separation)
 # -------------------------------------------------------------
 if search_input.strip():
     # Dynamic column identification to prevent errors if names differ
@@ -102,7 +166,35 @@ if search_input.strip():
             matched_vars = pd.concat(matched_vars_by_concept).drop_duplicates(subset=['TABLE', var_col])
 
 # -------------------------------------------------------------
-# 3. Demographics Bundling & Python Code Generation
+# 4. Result Display & Selection UI
+# -------------------------------------------------------------
+selected_tables = []
+if not matched_vars.empty:
+    st.success(f"Found {len(matched_vars)} matching variable indicators!")
+    
+    # Sort results to place best semantic hits at the top if similarity scores are present
+    if 'SIMILARITY' in matched_vars.columns:
+        matched_vars = matched_vars.sort_values(by='SIMILARITY', ascending=False)
+    
+    # Show search results inside a dynamic data editor
+    st.write("#### Select which tables to include in your data package:")
+    
+    # Create interactive selection column mapping unique table names
+    unique_tables = sorted(matched_vars['TABLE'].unique())
+    selected_tables = st.multiselect(
+        "Choose NHANES tables to bundle:",
+        options=unique_tables,
+        default=unique_tables[:5] if len(unique_tables) > 0 else [] # Default-select first few
+    )
+    
+    # Render table preview
+    st.dataframe(matched_vars, use_container_width=True, hide_index=True)
+else:
+    if search_input.strip():
+        st.warning("No variables matched your search parameters.")
+
+# -------------------------------------------------------------
+# 5. Demographics Bundling & Python Code Generation
 # -------------------------------------------------------------
 if selected_tables:
     st.write("---")
@@ -182,5 +274,4 @@ nhanes_data = fetch_nhanes_tables(tables_to_load)
 # first_table = list(nhanes_data.keys())[0]
 # print(nhanes_data[first_table].head())
 """
-    
     st.code(python_snippet, language="python")
