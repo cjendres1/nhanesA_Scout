@@ -1,4 +1,2 @@
 streamlit
 pandas
-plotly
-rpy2==3.5.1
