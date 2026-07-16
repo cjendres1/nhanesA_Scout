@@ -48,8 +48,8 @@ custom_converter = robjects.default_converter + pandas2ri.converter
 
 # Load the bridge and assign it to the GLOBAL variable 'nhanes'
 try:
-    with custom_converter.context():
-        # This assigns 'nhanes' globally so the button can see it
+    # Use localconverter() for rpy2 v3.5.1 compatibility
+    with localconverter(custom_converter) as cv:
         nhanes = init_r_bridge()
     st.success("🎉 R-to-Python Bridge Connected Successfully!")
 except Exception as e:
@@ -64,12 +64,12 @@ st.write("### Test Connection")
 if st.button("Query NHANES table metadata"):
     with st.spinner("Calling R `nhanesA::nhanesManifest`..."):
         try:
-            # We use the thread-safe localconverter context to handle R-to-Python translations
-            with custom_converter.context():
+            # We use localconverter(custom_converter) to handle R-to-Python translations safely
+            with localconverter(custom_converter) as cv:
                 # 1. Fetch R data using the globally defined 'nhanes' package
                 r_data = nhanes.nhanesManifest("DEMO")
                 
-                # 2. Explicitly convert the resulting R dataframe to Pandas
+                # 2. Convert the resulting R dataframe to Pandas
                 pd_df = robjects.conversion.get_conversion().rpy2py(r_data)
                 
             st.write("Returned Tables:")
@@ -77,4 +77,3 @@ if st.button("Query NHANES table metadata"):
             
         except Exception as e:
             st.error(f"Error querying table metadata: {e}")
-            
