@@ -34,46 +34,92 @@ if df_tables is None or df_vars is None:
     st.stop()
 
 # -------------------------------------------------------------
-# 2. Search & Filter Engine (Deduplicated with Strict Unique Match Counts)
+# 2. Search & Filter Engine (Smart Phrasing & Comma Separation)
 # -------------------------------------------------------------
 st.write("### 🔍 Step 1: Search the NHANES Universe")
-search_term = st.text_input(
-    "Enter keywords (e.g., 'cholesterol', 'blood pressure', 'income', 'diet')", 
-    value="",
-    help="Searches across all NHANES variable names and descriptions."
+
+# Clarified and intuitive instructions for users
+search_input = st.text_input(
+    "Enter search terms (separate distinct topics with commas):", 
+    placeholder="e.g., blood pressure, diet",
+    help="Use a comma to search multiple topics at once (e.g., 'blood pressure, income'). Spaces inside a phrase will be treated as a single concept."
 )
 
-if search_term.strip():
-    # Clean the search term
-    term = search_term.strip().lower()
+if search_input.strip():
+    # 1. Split search input by COMMAS to parse distinct concepts, stripping spaces and quotes
+    raw_concepts = search_input.split(",")
+    search_concepts = [concept.strip().replace('"', '').replace("'", "") for concept in raw_concepts if concept.strip()]
     
     # Locate the correct column names dynamically
     var_col = 'VARNAME' if 'VARNAME' in df_vars.columns else ('VARIABLE' if 'VARIABLE' in df_vars.columns else df_vars.columns[0])
     desc_col = 'VARDESC' if 'VARDESC' in df_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in df_vars.columns else df_vars.columns[1])
     
-    # 1. Strictly filter variables that contain the search term
-    matched_vars = df_vars[
-        df_vars[var_col].str.lower().str.contains(term, na=False) |
-        df_vars[desc_col].str.lower().str.contains(term, na=False)
-    ].copy()
+    # 2. If the user provided multiple comma-separated terms, let them choose the logical join
+    if len(search_concepts) > 1:
+        st.write(f"Parsed **{len(search_concepts)}** separate search concepts: " + ", ".join([f"`{c}`" for c in search_concepts]))
+        search_mode = st.radio(
+            "Search Combination Mode:",
+            options=["Match ALL concepts (AND)", "Match ANY concept (OR)"],
+            horizontal=True,
+            help=(
+                "Match ALL: A table must contain matches for EVERY comma-separated concept (e.g., must contain a blood pressure variable AND a diet variable).\n"
+                "Match ANY: Returns tables containing any of the concepts, combined and deduplicated."
+            )
+        )
+    else:
+        # Default to a single-concept search if no commas are used
+        search_mode = "Match ANY concept (OR)"
+
+    # 3. Apply the filtering logic across concepts
+    matched_vars_by_concept = []
     
+    for concept in search_concepts:
+        # A single concept might contain spaces (e.g., "blood pressure"). We look for rows that contain ALL words in that concept.
+        words_in_concept = concept.lower().split()
+        concept_df = df_vars.copy()
+        for word in words_in_concept:
+            concept_df = concept_df[
+                concept_df[var_col].str.lower().str.contains(word, na=False) |
+                concept_df[desc_col].str.lower().str.contains(word, na=False)
+            ]
+        # Keep track of which variables matched this specific comma-separated concept
+        concept_df = concept_df.copy()
+        concept_df['MATCHED_CONCEPT'] = concept
+        matched_vars_by_concept.append(concept_df)
+
+    # 4. Combine the filtered subsets depending on AND / OR logic
+    if search_mode == "Match ALL concepts (AND)":
+        # Get tables that have matches across *every* individual concept list
+        tables_per_concept = [set(cdf['TABLE'].unique()) for cdf in matched_vars_by_concept]
+        common_tables = set.intersection(*tables_per_concept) if tables_per_concept else set()
+        
+        # Filter combined variable matches to only those in the common tables
+        all_matches_combined = pd.concat(matched_vars_by_concept)
+        matched_vars = all_matches_combined[all_matches_combined['TABLE'].isin(common_tables)].copy()
+    else:
+        # Match ANY: Combine and simply drop duplicates of matches (natively deduplicates tables)
+        matched_vars = pd.concat(matched_vars_by_concept).drop_duplicates(subset=['TABLE', var_col])
+
+    # 5. Process and display results if matches exist
     if not matched_vars.empty:
-        # 2. Count ONLY the UNIQUE variable names matching per table (resolves the duplicate metadata count)
+        # Count ONLY the UNIQUE variable names matching per table (deduplicated)
         match_counts = matched_vars.groupby('TABLE')[var_col].nunique().reset_index(name='MATCH_COUNT')
         
-        # 3. Get unique tables and merge with the strict unique match counts
+        # Get unique tables and merge with the strict unique match counts
         unique_tables_catalog = df_tables.drop_duplicates(subset=['TABLE']).copy()
         matched_tables_df = unique_tables_catalog.merge(match_counts, on='TABLE', how='inner')
         
         # Sort so tables with the most relevant search hits appear first
         matched_tables_df = matched_tables_df.sort_values(by='MATCH_COUNT', ascending=False)
         
-        st.success(f"Found **{len(matched_tables_df)}** unique tables containing matching variables.")
+        st.success(f"Found **{len(matched_tables_df)}** unique tables matching your criteria.")
         
         # --- Interactive Table Selection ---
         st.write("#### Select tables to retrieve:")
         
-        matched_tables_df.insert(0, "Select", True)  # Default to selected
+        # Ensure 'Select' checkbox column isn't already added
+        if "Select" not in matched_tables_df.columns:
+            matched_tables_df.insert(0, "Select", True)  # Default to selected
         
         edited_df = st.data_editor(
             matched_tables_df,
@@ -83,8 +129,8 @@ if search_term.strip():
                 "Select": st.column_config.CheckboxColumn(required=True),
                 "TABLE": "Table Code",
                 "MATCH_COUNT": st.column_config.NumberColumn(
-                    "Matching Variables Found",
-                    help="The exact number of unique variables in this table that matched your search term.",
+                    "Matching Variables",
+                    help="The exact number of unique variables in this table that matched your search query.",
                     format="%d ⭐"
                 ),
                 "TABLEDESC": "Description / Title",
@@ -100,22 +146,24 @@ if search_term.strip():
         st.write("---")
         with st.expander("👁️ View exactly which variables matched your search in each table"):
             for table_code in matched_tables_df['TABLE'].unique():
-                # Extract and deduplicate the variable names displayed in the expander too
                 table_specific_matches = matched_vars[matched_vars['TABLE'] == table_code].drop_duplicates(subset=[var_col])
                 st.markdown(f"**`{table_code}`** ({len(table_specific_matches)} unique match(es)):")
                 st.dataframe(
-                    table_specific_matches[[var_col, desc_col]], 
+                    table_specific_matches[[var_col, desc_col, 'MATCHED_CONCEPT']], 
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    column_config={
+                        "MATCHED_CONCEPT": "Search Category"
+                    }
                 )
                 
     else:
-        st.warning(f"No variables found matching '{search_term}'. Try another keyword.")
+        st.warning(f"No variables found matching your search. Try removing a concept or switching to 'Match ANY concept'.")
         selected_tables = []
 else:
     st.info("Please enter a search term above to begin discovering tables.")
     selected_tables = []
-
+    
 # -------------------------------------------------------------
 # 3. Demographics Bundling & Python Code Generation
 # -------------------------------------------------------------
