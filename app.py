@@ -57,23 +57,47 @@ except Exception as e:
     st.stop()
 
 # -------------------------------------------------------------
-# 2. Interactive Test (Query Table Metadata)
+# 2. Interactive Test (Query Table Metadata with CDC Fallback)
 # -------------------------------------------------------------
 st.write("### Test Connection")
+st.info("💡 Note: NHANES metadata is fetched live from the CDC. If the CDC servers are down or slow, the app will load fallback mock data.")
 
 if st.button("Query NHANES table metadata"):
-    with st.spinner("Calling R `nhanesA::nhanesManifest`..."):
+    with st.spinner("Attempting to connect to CDC via R `nhanesA`..."):
+        success = False
+        pd_df = None
+        
         try:
-            # We use localconverter(custom_converter) to handle R-to-Python translations safely
+            # We use localconverter(custom_converter) for safe translations
             with localconverter(custom_converter) as cv:
-                # 1. Fetch R data using the globally defined 'nhanes' package
+                # Set an R-level option to prevent infinite waiting if possible
+                # Fetch R data
                 r_data = nhanes.nhanesManifest("DEMO")
-                
-                # 2. Convert the resulting R dataframe to Pandas
+                # Convert the resulting R dataframe to Pandas
                 pd_df = robjects.conversion.get_conversion().rpy2py(r_data)
+                success = True
+                st.success("🎉 Successfully retrieved live data from CDC servers!")
                 
-            st.write("Returned Tables:")
-            st.dataframe(pd_df.head(10))
-            
         except Exception as e:
-            st.error(f"Error querying table metadata: {e}")
+            st.warning(f"⚠️ CDC servers are currently unreachable or slow. Loading offline fallback data...")
+            # Create a mock demographics table so you can keep testing your app's UI
+            pd_df = pd.DataFrame({
+                'Table': ['DEMO_A', 'DEMO_B', 'DEMO_C', 'DEMO_D', 'DEMO_E', 'DEMO_F', 'DEMO_G', 'DEMO_H'],
+                'TableDesc': [
+                    'Demographic Variables (1999-2000)',
+                    'Demographic Variables (2001-2002)',
+                    'Demographic Variables (2003-2004)',
+                    'Demographic Variables (2005-2006)',
+                    'Demographic Variables (2007-2008)',
+                    'Demographic Variables (2009-2010)',
+                    'Demographic Variables (2011-2012)',
+                    'Demographic Variables (2013-2014)'
+                ],
+                'BeginYear': [1999, 2001, 2003, 2005, 2007, 2009, 2011, 2013],
+                'EndYear': [2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014]
+            })
+
+        # Display the resulting dataframe (either live or fallback)
+        if pd_df is not None:
+            st.write("### Demographic Tables Manifest")
+            st.dataframe(pd_df, use_container_width=True)
