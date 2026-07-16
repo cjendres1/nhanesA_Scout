@@ -13,28 +13,37 @@ st.caption("Powered by R package nhanesA & Python Streamlit")
 # -------------------------------------------------------------
 @st.cache_resource
 def init_r_bridge():
+    """Installs nhanesA safely into a user-writable directory on Streamlit Cloud."""
     from rpy2.robjects.packages import importr, isinstalled
+    import rpy2.robjects as robjects
+    import os
+
+    # 1. Define a local, writable directory in the user's home folder for R packages
+    user_home = os.path.expanduser("~")
+    r_libs_path = os.path.join(user_home, "R", "library")
     
-    # Activate automatic R-to-Pandas dataframe conversion
-    pandas2ri.activate()
+    # Create the directory if it doesn't exist
+    if not os.path.exists(r_libs_path):
+        os.makedirs(r_libs_path)
+        
+    # Tell the local environment to look at this directory for R packages
+    os.environ["R_LIBS_USER"] = r_libs_path
     
-    # Install nhanesA silently if it's missing
-    if not isinstalled('nhanesA'):
+    # 2. Check if nhanesA is already installed in our custom directory
+    # We pass our local path to 'lib_loc' so isinstalled searches there
+    if not isinstalled('nhanesA', lib_loc=r_libs_path):
         utils = importr('utils')
+        
+        # Force R to install directly to our user-writable library path
         utils.install_packages(
             'nhanesA', 
+            lib=r_libs_path,            # Crucial: Forces install to writable home directory
             repos='https://cloud.r-project.org', 
             dependencies=True
         )
-    return importr('nhanesA')
-
-# Safe initialization
-try:
-    nhanes = init_r_bridge()
-    st.success("🎉 R-to-Python Bridge Connected Successfully!")
-except Exception as e:
-    st.error(f"❌ Failed to load R bridge: {e}")
-    st.stop()
+        
+    # 3. Load the package, specifying where it lives
+    return importr('nhanesA', lib_loc=r_libs_path)
 
 # -------------------------------------------------------------
 # 2. Interactive Test (Query Table Metadata)
