@@ -2,141 +2,176 @@ import streamlit as st
 import pandas as pd
 import os
 
-# Set up clean, wide layout
-st.set_page_config(
-    page_title="NHANES Scout",
-    page_icon="🔎",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
+# Page setup
+st.set_page_config(page_title="NHANES Scout", page_icon="🔎", layout="wide")
 st.title("🔎 NHANES Scout")
-st.caption("A lightning-fast, offline-first explorer for NHANES Demographics metadata.")
+st.caption("Locate any NHANES tables based on search terms, bundle demographics, and generate Python loading code.")
 
 # -------------------------------------------------------------
-# 1. High-Performance Data Loaders (With Column Auto-Mapping)
+# 1. High-Performance Caching Loaders
 # -------------------------------------------------------------
 @st.cache_data
-def load_manifests():
-    """Loads cached NHANES metadata files from the repository."""
+def load_global_manifests():
     demo_path = "cache_demo_manifest.csv"
     vars_path = "cache_variables_manifest.csv"
     
-    # Fallback to look in the current directory if they are named without extensions
-    if not os.path.exists(demo_path) and os.path.exists("cache_demo_manifest"):
-        demo_path = "cache_demo_manifest"
-    if not os.path.exists(vars_path) and os.path.exists("cache_variables_manifest"):
-        vars_path = "cache_variables_manifest"
-
-    try:
-        df_demo = pd.read_csv(demo_path)
-        df_vars = pd.read_csv(vars_path)
-        
-        # --- Clean up and Standardize df_demo Columns ---
-        # Make all column names uppercase to strip away any casing issues
-        df_demo.columns = [col.upper() for col in df_demo.columns]
-        
-        # Ensure 'TABLE' is the standardized column name
-        if 'TABLE' not in df_demo.columns:
-            possible_cols = [c for c in df_demo.columns if 'TABLE' in c]
-            if possible_cols:
-                df_demo.rename(columns={possible_cols[0]: 'TABLE'}, inplace=True)
-
-        # --- Clean up and Standardize df_vars Columns ---
-        df_vars.columns = [col.upper() for col in df_vars.columns]
-        
-        if 'TABLE' not in df_vars.columns:
-            alt_cols = [c for c in df_vars.columns if 'TABLE' in c or 'TAB' in c]
-            if alt_cols:
-                df_vars.rename(columns={alt_cols[0]: 'TABLE'}, inplace=True)
-                
-        return df_demo, df_vars
-        
-    except Exception as e:
-        st.error(f"Error loading cache files: {e}")
+    if not os.path.exists(demo_path) or not os.path.exists(vars_path):
         return None, None
+        
+    df_tables = pd.read_csv(demo_path)
+    df_vars = pd.read_csv(vars_path)
+    
+    # Force uppercase column safety
+    df_tables.columns = [col.upper() for col in df_tables.columns]
+    df_vars.columns = [col.upper() for col in df_vars.columns]
+    
+    return df_tables, df_vars
 
-# Load datasets
-df_demo, df_vars = load_manifests()
+df_tables, df_vars = load_global_manifests()
 
-if df_demo is None or df_vars is None:
-    st.warning("⚠️ Cache files not detected. Please ensure 'cache_demo_manifest.csv' and 'cache_variables_manifest.csv' are pushed to your GitHub repository root.")
+if df_tables is None or df_vars is None:
+    st.warning("⚠️ High-capacity cache files not detected. Ensure 'cache_demo_manifest.csv' and 'cache_variables_manifest.csv' are uploaded.")
     st.stop()
 
 # -------------------------------------------------------------
-# 2. Sidebar Navigation & Global Stats (Standardized Keys)
+# 2. Search & Filter Engine
 # -------------------------------------------------------------
-with st.sidebar:
-    st.header("📊 Database Stats")
-    # Standardized to 'TABLE' to resolve the KeyError
-    st.metric("Total Demographics Tables", f"{df_demo['TABLE'].nunique()}")
-    st.metric("Total Indexed Variables", f"{len(df_vars):,}")
-    
-    st.write("---")
-    st.markdown(
-        """
-        **About NHANES Scout**
-        This tool provides instantaneous exploration of NHANES demographic tables. 
-        Because it runs entirely on local pre-cached metadata, it remains 100% operational even when the CDC servers are down.
-        """
-    )
+st.write("### 🔍 Step 1: Search the NHANES Universe")
+search_term = st.text_input(
+    "Enter keywords (e.g., 'cholesterol', 'blood pressure', 'income', 'diet')", 
+    value="",
+    help="Searches across all NHANES variable names, descriptions, and table names."
+)
 
-# -------------------------------------------------------------
-# 3. Main Dashboard UI
-# -------------------------------------------------------------
-tab1, tab2 = st.tabs(["📂 Tables Directory", "🔑 Variable Explorer"])
+matched_tables_dict = {}
 
-# --- TAB 1: TABLES DIRECTORY ---
-with tab1:
-    st.subheader("Demographics Tables Manifest")
-    st.write("Browse all historical demographic cycles found in the `nhanesA` metadata:")
+if search_term.strip():
+    term = search_term.lower()
     
-    # Use standardized uppercase keys for column config
-    st.dataframe(
-        df_demo, 
-        use_container_width=True,
-        column_config={
-            "TABLE": "Table Code",
-            "TABLEDESC": "Description",
-            "BEGINYEAR": "Start Year",
-            "ENDYEAR": "End Year"
-        }
-    )
-
-# --- TAB 2: VARIABLE EXPLORER ---
-with tab2:
-    st.subheader("Variable Inspector")
+    # Search variables by name or description
+    matched_vars = df_vars[
+        df_vars['VARNAME'].str.lower().str.contains(term, na=False) |
+        df_vars['VARDESC'].str.lower().str.contains(term, na=False)
+    ]
     
-    # Create dropdown to choose which table to inspect
-    available_tables = sorted(df_demo['TABLE'].unique())
-    selected_table = st.selectbox(
-        "Select an NHANES Demographic Table to inspect its variables:",
-        options=available_tables,
-        index=len(available_tables) - 1  # Default to the most recent cycle
-    )
+    # Get the table codes that contain those matching variables
+    unique_table_codes = matched_vars['TABLE'].unique()
     
-    # Filter variables on the fly using standardized uppercase key
-    filtered_vars = df_vars[df_vars['TABLE'] == selected_table].copy()
+    # Map back to get table details from the tables catalog
+    matched_tables_df = df_tables[df_tables['TABLE'].isin(unique_table_codes)].copy()
     
-    st.write(f"Showing variables present in **`{selected_table}`**:")
-    
-    # Display the variable details
-    if not filtered_vars.empty:
-        st.metric("Variables in this Table", len(filtered_vars))
+    if not matched_tables_df.empty:
+        st.success(f"Found **{len(matched_tables_df)}** tables containing variables matching '{search_term}'.")
         
-        # Determine current casing for label columns dynamically
-        var_col = 'VARNAME' if 'VARNAME' in filtered_vars.columns else ('VARIABLE' if 'VARIABLE' in filtered_vars.columns else filtered_vars.columns[0])
-        desc_col = 'VARDESC' if 'VARDESC' in filtered_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in filtered_vars.columns else filtered_vars.columns[1])
+        # Display matching tables with interactive checkbox selection
+        st.write("#### Select tables to retrieve:")
         
-        # Selectable/searchable data grid of the variables
-        st.dataframe(
-            filtered_vars, 
+        # We will use an interactive data_editor to let the user select rows
+        matched_tables_df.insert(0, "Select", True)  # Default all matches to selected
+        edited_df = st.data_editor(
+            matched_tables_df,
+            hide_index=True,
             use_container_width=True,
             column_config={
-                var_col: "Variable Name",
-                desc_col: "Detailed Label/Description"
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "TABLE": "Table Code",
+                "TABLEDESC": "Description / Title",
+                "BEGINYEAR": "Start Year",
+                "ENDYEAR": "End Year",
+                "COMPONENT": "Component"
             }
         )
-    else:
-        st.info(f"No variables found matching table code `{selected_table}` in cache.")
         
+        # Extract the finalized selection list from the editor
+        selected_tables = edited_df[edited_df["Select"] == True]["TABLE"].tolist()
+        
+    else:
+        st.warning("No tables found matching those criteria. Try another keyword.")
+        selected_tables = []
+else:
+    st.info("Please enter a search term above to begin discovering tables.")
+    selected_tables = []
+
+# -------------------------------------------------------------
+# 3. Demographics Bundling & Python Code Generation
+# -------------------------------------------------------------
+if selected_tables:
+    st.write("---")
+    st.write("### 📦 Step 2: Configure Bundle & Retrieve")
+    
+    # Option: Include demographics table automatically
+    include_demos = st.checkbox(
+        "💡 **Auto-include corresponding Demographics tables**", 
+        value=True,
+        help="Recommended. This auto-resolves the demographics table for each selected table's cycle so you can merge them on 'SEQN' later."
+    )
+    
+    # Build final list of tables to download
+    final_download_list = list(selected_tables)
+    
+    if include_demos:
+        demo_additions = []
+        # Find which years/cycles the selected tables belong to
+        for table in selected_tables:
+            # Match the row in the table catalog to find the cycle year
+            row = df_tables[df_tables['TABLE'] == table]
+            if not row.empty:
+                begin_year = int(row.iloc[0]['BEGINYEAR'])
+                # Map starting year to standard NHANES demographics table naming
+                # 1999 -> DEMO, 2001 -> DEMO_B, 2003 -> DEMO_C, etc.
+                if begin_year == 1999:
+                    demo_table = "DEMO"
+                else:
+                    cycle_letter = chr(65 + int((begin_year - 1999) / 2)) # Converts years to _B, _C, etc.
+                    demo_table = f"DEMO_{cycle_letter}"
+                
+                if demo_table not in final_download_list and demo_table not in demo_additions:
+                    demo_additions.append(demo_table)
+        
+        final_download_list.extend(demo_additions)
+        if demo_additions:
+            st.info(f"Adding demographic baselines: `{', '.join(demo_additions)}`")
+
+    # Display final queue
+    st.write("**Your Final Data Package List:**")
+    st.code(", ".join(final_download_list))
+    
+    # Generate the Easy Python Retrieval Code
+    st.write("#### 🐍 Step 3: Copy Code to Python")
+    st.write("Because the CDC servers limit Streamlit web-scraping speed, use this optimized snippet to load these files directly into your local Python environment:")
+    
+    # Generate copy-pasteable script utilizing pd.read_sas or a wrapper
+    python_snippet = f"""import pandas as pd
+
+# List of NHANES tables identified via NHANES Scout
+tables_to_load = {final_download_list}
+
+def fetch_nhanes_tables(table_list):
+    datasets = {{}}
+    for table in table_list:
+        print(f"Downloading table: {{table}}...")
+        # NHANES tables are hosted as SAS Transport (.XPT) files on the CDC website
+        url = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{table[:4]}}/{{table}}.XPT"
+        try:
+            datasets[table] = pd.read_sas(url)
+            print(f" -> Loaded {{len(datasets[table])}} rows.")
+        except Exception as e:
+            # Fallback if table name format is slightly different on CDC
+            try:
+                # Some tables reside in the root demographics directory
+                url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{{table}}.XPT"
+                datasets[table] = pd.read_sas(url_alt)
+                print(f" -> Loaded {{len(datasets[table])}} rows (alternative path).")
+            except Exception as alt_err:
+                print(f" ❌ Error fetching {{table}}: {{alt_err}}")
+    return datasets
+
+# Fetch all selected tables instantly
+nhanes_data = fetch_nhanes_tables(tables_to_load)
+
+# Example: Inspecting one of the loaded DataFrames
+# first_table = list(nhanes_data.keys())[0]
+# print(nhanes_data[first_table].head())
+"""
+    
+    st.code(python_snippet, language="python")
