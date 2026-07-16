@@ -34,40 +34,45 @@ if df_tables is None or df_vars is None:
     st.stop()
 
 # -------------------------------------------------------------
-# 2. Search & Filter Engine
+# 2. Search & Filter Engine (Deduplicated with Match Counts)
 # -------------------------------------------------------------
 st.write("### 🔍 Step 1: Search the NHANES Universe")
 search_term = st.text_input(
     "Enter keywords (e.g., 'cholesterol', 'blood pressure', 'income', 'diet')", 
     value="",
-    help="Searches across all NHANES variable names, descriptions, and table names."
+    help="Searches across all NHANES variable names and descriptions."
 )
-
-matched_tables_dict = {}
 
 if search_term.strip():
     term = search_term.lower()
     
-    # Search variables by name or description
+    # 1. Search the master variables dataframe
     matched_vars = df_vars[
         df_vars['VARNAME'].str.lower().str.contains(term, na=False) |
         df_vars['VARDESC'].str.lower().str.contains(term, na=False)
-    ]
+    ].copy()
     
-    # Get the table codes that contain those matching variables
-    unique_table_codes = matched_vars['TABLE'].unique()
-    
-    # Map back to get table details from the tables catalog
-    matched_tables_df = df_tables[df_tables['TABLE'].isin(unique_table_codes)].copy()
-    
-    if not matched_tables_df.empty:
-        st.success(f"Found **{len(matched_tables_df)}** tables containing variables matching '{search_term}'.")
+    if not matched_vars.empty:
+        # 2. Group by table and count the number of matching variables in each table
+        match_counts = matched_vars.groupby('TABLE').size().reset_index(name='MATCH_COUNT')
+        
+        # 3. Pull table metadata, ensuring we have strictly 1 row per table code
+        unique_tables_catalog = df_tables.drop_duplicates(subset=['TABLE']).copy()
+        
+        # 4. Merge the match counts with our unique tables catalog
+        matched_tables_df = unique_tables_catalog.merge(match_counts, on='TABLE', how='inner')
+        
+        # 5. Sort by the number of matches descending (highest relevance first)
+        matched_tables_df = matched_tables_df.sort_values(by='MATCH_COUNT', ascending=False)
+        
+        st.success(f"Found **{len(matched_tables_df)}** unique tables matching your search term '{search_term}'.")
         
         # Display matching tables with interactive checkbox selection
         st.write("#### Select tables to retrieve:")
         
-        # We will use an interactive data_editor to let the user select rows
+        # Insert selection column
         matched_tables_df.insert(0, "Select", True)  # Default all matches to selected
+        
         edited_df = st.data_editor(
             matched_tables_df,
             hide_index=True,
@@ -75,6 +80,11 @@ if search_term.strip():
             column_config={
                 "Select": st.column_config.CheckboxColumn(required=True),
                 "TABLE": "Table Code",
+                "MATCH_COUNT": st.column_config.NumberColumn(
+                    "Matched Variables",
+                    help="The number of unique variables in this table matching your search term.",
+                    format="%d ⭐"
+                ),
                 "TABLEDESC": "Description / Title",
                 "BEGINYEAR": "Start Year",
                 "ENDYEAR": "End Year",
