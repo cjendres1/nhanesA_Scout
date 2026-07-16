@@ -37,7 +37,6 @@ def load_manifests():
         df_demo.columns = [col.upper() for col in df_demo.columns]
         
         # Ensure 'TABLE' is the standardized column name
-        # If 'TABLE' is missing but something like 'SOURCETABLE' exists, rename it
         if 'TABLE' not in df_demo.columns:
             possible_cols = [c for c in df_demo.columns if 'TABLE' in c]
             if possible_cols:
@@ -47,13 +46,9 @@ def load_manifests():
         df_vars.columns = [col.upper() for col in df_vars.columns]
         
         if 'TABLE' not in df_vars.columns:
-            # Check for alternative names like 'SOURCETABLE' or 'TABLENAME'
             alt_cols = [c for c in df_vars.columns if 'TABLE' in c or 'TAB' in c]
             if alt_cols:
                 df_vars.rename(columns={alt_cols[0]: 'TABLE'}, inplace=True)
-            else:
-                # If all else fails, log columns for debugging
-                st.error(f"Could not find a table identifier column in variables. Available columns: {list(df_vars.columns)}")
                 
         return df_demo, df_vars
         
@@ -69,11 +64,12 @@ if df_demo is None or df_vars is None:
     st.stop()
 
 # -------------------------------------------------------------
-# 2. Sidebar Navigation & Global Stats
+# 2. Sidebar Navigation & Global Stats (Standardized Keys)
 # -------------------------------------------------------------
 with st.sidebar:
     st.header("📊 Database Stats")
-    st.metric("Total Demographics Tables", f"{df_demo['Table'].nunique()}")
+    # Standardized to 'TABLE' to resolve the KeyError
+    st.metric("Total Demographics Tables", f"{df_demo['TABLE'].nunique()}")
     st.metric("Total Indexed Variables", f"{len(df_vars):,}")
     
     st.write("---")
@@ -95,15 +91,15 @@ with tab1:
     st.subheader("Demographics Tables Manifest")
     st.write("Browse all historical demographic cycles found in the `nhanesA` metadata:")
     
-    # Clean up column displays if needed and show interactive table
+    # Use standardized uppercase keys for column config
     st.dataframe(
         df_demo, 
         use_container_width=True,
         column_config={
-            "Table": "Table Code",
-            "TableDesc": "Description",
-            "BeginYear": "Start Year",
-            "EndYear": "End Year"
+            "TABLE": "Table Code",
+            "TABLEDESC": "Description",
+            "BEGINYEAR": "Start Year",
+            "ENDYEAR": "End Year"
         }
     )
 
@@ -119,7 +115,7 @@ with tab2:
         index=len(available_tables) - 1  # Default to the most recent cycle
     )
     
-    # Filter variables on the fly (using our standardized upper-case column names)
+    # Filter variables on the fly using standardized uppercase key
     filtered_vars = df_vars[df_vars['TABLE'] == selected_table].copy()
     
     st.write(f"Showing variables present in **`{selected_table}`**:")
@@ -128,7 +124,7 @@ with tab2:
     if not filtered_vars.empty:
         st.metric("Variables in this Table", len(filtered_vars))
         
-        # Match whatever casing VarName / VarDesc ended up with
+        # Determine current casing for label columns dynamically
         var_col = 'VARNAME' if 'VARNAME' in filtered_vars.columns else ('VARIABLE' if 'VARIABLE' in filtered_vars.columns else filtered_vars.columns[0])
         desc_col = 'VARDESC' if 'VARDESC' in filtered_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in filtered_vars.columns else filtered_vars.columns[1])
         
