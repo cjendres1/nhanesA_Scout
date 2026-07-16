@@ -10,160 +10,97 @@ st.caption("Locate any NHANES tables based on search terms, bundle demographics,
 # -------------------------------------------------------------
 # 1. High-Performance Caching Loaders
 # -------------------------------------------------------------
+# Import this at the very top of your app.py along with other libraries
+from scipy.sparse import load_npz, csr_matrix
+
 @st.cache_data
-def load_global_manifests():
-    demo_path = "cache_demo_manifest.csv"
-    vars_path = "cache_variables_manifest.csv"
-    
-    if not os.path.exists(demo_path) or not os.path.exists(vars_path):
-        return None, None
-        
-    df_tables = pd.read_csv(demo_path)
-    df_vars = pd.read_csv(vars_path)
-    
-    # Force uppercase column safety
-    df_tables.columns = [col.upper() for col in df_tables.columns]
-    df_vars.columns = [col.upper() for col in df_vars.columns]
-    
-    return df_tables, df_vars
+def load_vector_embeddings(emb_mtime):
+    # Change target file extension to .npz
+    emb_path = "cache_vector_embeddings.npz"
+    if os.path.exists(emb_path):
+        return load_npz(emb_path)
+    return None
 
-df_tables, df_vars = load_global_manifests()
-
-if df_tables is None or df_vars is None:
-    st.warning("⚠️ High-capacity cache files not detected. Ensure 'cache_demo_manifest.csv' and 'cache_variables_manifest.csv' are uploaded.")
-    st.stop()
+# Update modification tracking file target at the bottom of Section 1:
+emb_mtime = os.path.getmtime("cache_vector_embeddings.npz") if os.path.exists("cache_vector_embeddings.npz") else 0
 
 # -------------------------------------------------------------
 # 2. Search & Filter Engine (Smart Phrasing & Comma Separation)
 # -------------------------------------------------------------
-st.write("### 🔍 Step 1: Search the NHANES Universe")
-
-# Clarified and intuitive instructions for users
-search_input = st.text_input(
-    "Enter search terms (separate distinct topics with commas):", 
-    placeholder="e.g., blood pressure, diet",
-    help="Use a comma to search multiple topics at once (e.g., 'blood pressure, income'). Spaces inside a phrase will be treated as a single concept."
-)
-
 if search_input.strip():
-    # 1. Split search input by COMMAS to parse distinct concepts, stripping spaces and quotes
-    raw_concepts = search_input.split(",")
-    search_concepts = [concept.strip().replace('"', '').replace("'", "") for concept in raw_concepts if concept.strip()]
-    
-    # Locate the correct column names dynamically
+    # Dynamic column identification to prevent errors if names differ
     var_col = 'VARNAME' if 'VARNAME' in df_vars.columns else ('VARIABLE' if 'VARIABLE' in df_vars.columns else df_vars.columns[0])
     desc_col = 'VARDESC' if 'VARDESC' in df_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in df_vars.columns else df_vars.columns[1])
     
-    # 2. If the user provided multiple comma-separated terms, let them choose the logical join
-    if len(search_concepts) > 1:
-        st.write(f"Parsed **{len(search_concepts)}** separate search concepts: " + ", ".join([f"`{c}`" for c in search_concepts]))
-        search_mode = st.radio(
-            "Search Combination Mode:",
-            options=["Match ALL concepts (AND)", "Match ANY concept (OR)"],
-            horizontal=True,
-            help=(
-                "Match ALL: A table must contain matches for EVERY comma-separated concept (e.g., must contain a blood pressure variable AND a diet variable).\n"
-                "Match ANY: Returns tables containing any of the concepts, combined and deduplicated."
-            )
-        )
-    else:
-        # Default to a single-concept search if no commas are used
-        search_mode = "Match ANY concept (OR)"
-
-    # 3. Apply the filtering logic across concepts
+    # Clean up and split the user's input by commas
+    raw_concepts = search_input.split(",")
+    search_concepts = [concept.strip().replace('"', '').replace("'", "") for concept in raw_concepts if concept.strip()]
+    
     matched_vars_by_concept = []
     
-    for concept in search_concepts:
-        # A single concept might contain spaces (e.g., "blood pressure"). We look for rows that contain ALL words in that concept.
-        words_in_concept = concept.lower().split()
-        concept_df = df_vars.copy()
-        for word in words_in_concept:
-            concept_df = concept_df[
-                concept_df[var_col].str.lower().str.contains(word, na=False) |
-                concept_df[desc_col].str.lower().str.contains(word, na=False)
-            ]
-        # Keep track of which variables matched this specific comma-separated concept
-        concept_df = concept_df.copy()
-        concept_df['MATCHED_CONCEPT'] = concept
-        matched_vars_by_concept.append(concept_df)
-
-    # 4. Combine the filtered subsets depending on AND / OR logic
-    if search_mode == "Match ALL concepts (AND)":
-        # Get tables that have matches across *every* individual concept list
-        tables_per_concept = [set(cdf['TABLE'].unique()) for cdf in matched_vars_by_concept]
-        common_tables = set.intersection(*tables_per_concept) if tables_per_concept else set()
-        
-        # Filter combined variable matches to only those in the common tables
-        all_matches_combined = pd.concat(matched_vars_by_concept)
-        matched_vars = all_matches_combined[all_matches_combined['TABLE'].isin(common_tables)].copy()
-    else:
-        # Match ANY: Combine and simply drop duplicates of matches (natively deduplicates tables)
-        matched_vars = pd.concat(matched_vars_by_concept).drop_duplicates(subset=['TABLE', var_col])
-
-    # 5. Process and display results if matches exist
-    if not matched_vars.empty:
-        # Count ONLY the UNIQUE variable names matching per table (deduplicated)
-        match_counts = matched_vars.groupby('TABLE')[var_col].nunique().reset_index(name='MATCH_COUNT')
-        
-        # Get unique tables and merge with the strict unique match counts
-        unique_tables_catalog = df_tables.drop_duplicates(subset=['TABLE']).copy()
-        matched_tables_df = unique_tables_catalog.merge(match_counts, on='TABLE', how='inner')
-        
-        # Sort so tables with the most relevant search hits appear first
-        matched_tables_df = matched_tables_df.sort_values(by='MATCH_COUNT', ascending=False)
-        
-        st.success(f"Found **{len(matched_tables_df)}** unique tables matching your criteria.")
-        
-        # --- Interactive Table Selection ---
-        st.write("#### Select tables to retrieve:")
-        
-        # Ensure 'Select' checkbox column isn't already added
-        if "Select" not in matched_tables_df.columns:
-            matched_tables_df.insert(0, "Select", True)  # Default to selected
-        
-        edited_df = st.data_editor(
-            matched_tables_df,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Select": st.column_config.CheckboxColumn(required=True),
-                "TABLE": "Table Code",
-                "MATCH_COUNT": st.column_config.NumberColumn(
-                    "Matching Variables",
-                    help="The exact number of unique variables in this table that matched your search query.",
-                    format="%d ⭐"
-                ),
-                "TABLEDESC": "Description / Title",
-                "BEGINYEAR": "Start Year",
-                "ENDYEAR": "End Year",
-                "COMPONENT": "Component"
-            }
-        )
-        
-        selected_tables = edited_df[edited_df["Select"] == True]["TABLE"].tolist()
-        
-        # --- View Exactly WHAT Matched ---
-        st.write("---")
-        with st.expander("👁️ View exactly which variables matched your search in each table"):
-            for table_code in matched_tables_df['TABLE'].unique():
-                table_specific_matches = matched_vars[matched_vars['TABLE'] == table_code].drop_duplicates(subset=[var_col])
-                st.markdown(f"**`{table_code}`** ({len(table_specific_matches)} unique match(es)):")
-                st.dataframe(
-                    table_specific_matches[[var_col, desc_col, 'MATCHED_CONCEPT']], 
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "MATCHED_CONCEPT": "Search Category"
-                    }
-                )
+    # --- METHOD A: SEMANTIC MATCHING (SPARSE TF-IDF) ---
+    if search_type == "Semantic Search (AI Concept Matching)":
+        with st.spinner("Analyzing semantics..."):
+            for concept in search_concepts:
+                # Convert user query to sparse representation
+                query_vector = vectorizer_model.transform([concept])
                 
+                # High-speed cosine similarity on sparse structures
+                from sklearn.preprocessing import normalize
+                normalized_embeddings = normalize(embeddings, norm='l2', axis=1)
+                normalized_query = normalize(query_vector, norm='l2', axis=1)
+                
+                # Dot product of sparse matrices is incredibly fast
+                similarities = (normalized_embeddings * normalized_query.T).toarray().squeeze()
+                
+                # Filter variables that hit at least a 15% similarity score
+                threshold = 0.15
+                matching_indices = np.where(similarities >= threshold)[0]
+                
+                if len(matching_indices) > 0:
+                    concept_df = df_vars.iloc[matching_indices].copy()
+                    concept_df['SIMILARITY'] = similarities[matching_indices]
+                    concept_df['MATCHED_CONCEPT'] = concept
+                    matched_vars_by_concept.append(concept_df)
+                    
+        if matched_vars_by_concept:
+            # Drop duplicates if a variable matched multiple semantic targets
+            matched_vars = pd.concat(matched_vars_by_concept).drop_duplicates(subset=['TABLE', var_col])
+        else:
+            matched_vars = pd.DataFrame()
+
+    # --- METHOD B: LITERAL SEARCH (PREVIOUS EXACT KEYWORD CODE) ---
     else:
-        st.warning(f"No variables found matching your search. Try removing a concept or switching to 'Match ANY concept'.")
-        selected_tables = []
-else:
-    st.info("Please enter a search term above to begin discovering tables.")
-    selected_tables = []
-    
+        if len(search_concepts) > 1:
+            st.write(f"Parsed **{len(search_concepts)}** search concepts: " + ", ".join([f"`{c}`" for c in search_concepts]))
+            search_mode = st.radio(
+                "Combination Mode:",
+                options=["Match ALL concepts (AND)", "Match ANY concept (OR)"],
+                horizontal=True
+            )
+        else:
+            search_mode = "Match ANY concept (OR)"
+
+        for concept in search_concepts:
+            words_in_concept = concept.lower().split()
+            concept_df = df_vars.copy()
+            for word in words_in_concept:
+                concept_df = concept_df[
+                    concept_df[var_col].str.lower().str.contains(word, na=False) |
+                    concept_df[desc_col].str.lower().str.contains(word, na=False)
+                ]
+            concept_df = concept_df.copy()
+            concept_df['MATCHED_CONCEPT'] = concept
+            matched_vars_by_concept.append(concept_df)
+
+        if search_mode == "Match ALL concepts (AND)":
+            tables_per_concept = [set(cdf['TABLE'].unique()) for cdf in matched_vars_by_concept]
+            common_tables = set.intersection(*tables_per_concept) if tables_per_concept else set()
+            all_matches_combined = pd.concat(matched_vars_by_concept)
+            matched_vars = all_matches_combined[all_matches_combined['TABLE'].isin(common_tables)].copy()
+        else:
+            matched_vars = pd.concat(matched_vars_by_concept).drop_duplicates(subset=['TABLE', var_col])
+
 # -------------------------------------------------------------
 # 3. Demographics Bundling & Python Code Generation
 # -------------------------------------------------------------
