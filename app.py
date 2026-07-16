@@ -44,34 +44,36 @@ search_term = st.text_input(
 )
 
 if search_term.strip():
-    term = search_term.lower()
+    # Clean the search term
+    term = search_term.strip().lower()
     
-    # 1. Search the master variables dataframe
+    # Locate the correct column names dynamically (handling VARNAME vs VARIABLE, etc.)
+    var_col = 'VARNAME' if 'VARNAME' in df_vars.columns else ('VARIABLE' if 'VARIABLE' in df_vars.columns else df_vars.columns[0])
+    desc_col = 'VARDESC' if 'VARDESC' in df_vars.columns else ('DESCRIPTION' if 'DESCRIPTION' in df_vars.columns else df_vars.columns[1])
+    
+    # 1. Strictly filter variables that contain the search term
     matched_vars = df_vars[
-        df_vars['VARNAME'].str.lower().str.contains(term, na=False) |
-        df_vars['VARDESC'].str.lower().str.contains(term, na=False)
+        df_vars[var_col].str.lower().str.contains(term, na=False) |
+        df_vars[desc_col].str.lower().str.contains(term, na=False)
     ].copy()
     
     if not matched_vars.empty:
-        # 2. Group by table and count the number of matching variables in each table
+        # 2. Count ONLY the filtered variables per table
         match_counts = matched_vars.groupby('TABLE').size().reset_index(name='MATCH_COUNT')
         
-        # 3. Pull table metadata, ensuring we have strictly 1 row per table code
+        # 3. Get unique tables and merge with the strict match counts
         unique_tables_catalog = df_tables.drop_duplicates(subset=['TABLE']).copy()
-        
-        # 4. Merge the match counts with our unique tables catalog
         matched_tables_df = unique_tables_catalog.merge(match_counts, on='TABLE', how='inner')
         
-        # 5. Sort by the number of matches descending (highest relevance first)
+        # Sort so tables with the most relevant search hits appear first
         matched_tables_df = matched_tables_df.sort_values(by='MATCH_COUNT', ascending=False)
         
-        st.success(f"Found **{len(matched_tables_df)}** unique tables matching your search term '{search_term}'.")
+        st.success(f"Found **{len(matched_tables_df)}** unique tables containing matching variables.")
         
-        # Display matching tables with interactive checkbox selection
+        # --- Interactive Table Selection ---
         st.write("#### Select tables to retrieve:")
         
-        # Insert selection column
-        matched_tables_df.insert(0, "Select", True)  # Default all matches to selected
+        matched_tables_df.insert(0, "Select", True)  # Default to selected
         
         edited_df = st.data_editor(
             matched_tables_df,
@@ -81,8 +83,8 @@ if search_term.strip():
                 "Select": st.column_config.CheckboxColumn(required=True),
                 "TABLE": "Table Code",
                 "MATCH_COUNT": st.column_config.NumberColumn(
-                    "Matched Variables",
-                    help="The number of unique variables in this table matching your search term.",
+                    "Matching Variables Found",
+                    help="The exact number of variables in this table that matched your search term.",
                     format="%d ⭐"
                 ),
                 "TABLEDESC": "Description / Title",
@@ -92,11 +94,22 @@ if search_term.strip():
             }
         )
         
-        # Extract the finalized selection list from the editor
         selected_tables = edited_df[edited_df["Select"] == True]["TABLE"].tolist()
         
+        # --- NEW UX FEATURE: Show Exactly WHAT Matched ---
+        st.write("---")
+        with st.expander("👁️ View exactly which variables matched your search in each table"):
+            for table_code in matched_tables_df['TABLE'].unique():
+                table_specific_matches = matched_vars[matched_vars['TABLE'] == table_code]
+                st.markdown(f"**`{table_code}`** ({len(table_specific_matches)} match(es)):")
+                st.dataframe(
+                    table_specific_matches[[var_col, desc_col]], 
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
     else:
-        st.warning("No tables found matching those criteria. Try another keyword.")
+        st.warning(f"No variables found matching '{search_term}'. Try another keyword.")
         selected_tables = []
 else:
     st.info("Please enter a search term above to begin discovering tables.")
