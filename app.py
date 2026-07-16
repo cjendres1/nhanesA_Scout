@@ -14,9 +14,9 @@ st.caption("Powered by R package nhanesA & Python Streamlit")
 def init_r_bridge():
     """Installs nhanesA safely into a user-writable directory on Streamlit Cloud."""
     from rpy2.robjects.packages import importr, isinstalled
-    import rpy2.robjects as robjects
-    
-    # 1. Define a local, writable directory in the user's home folder
+    import os
+
+    # Define a local, writable directory in the user's home folder for R packages
     user_home = os.path.expanduser("~")
     r_libs_path = os.path.join(user_home, "R", "library")
     
@@ -25,37 +25,18 @@ def init_r_bridge():
         
     os.environ["R_LIBS_USER"] = r_libs_path
     
-    # 2. Check if nhanesA is already installed in our custom directory
+    # Install nhanesA if missing (dependencies are skipped as they are installed via apt-get)
     if not isinstalled('nhanesA', lib_loc=r_libs_path):
         utils = importr('utils')
         utils.install_packages(
             'nhanesA', 
             lib=r_libs_path,
             repos='https://cloud.r-project.org', 
-            dependencies=True
+            dependencies=False  # Crucial: Keeps R from trying to compile system packages
         )
         
-    # 3. Load the package, specifying where it lives
     return importr('nhanesA', lib_loc=r_libs_path)
-
-# Initialize global modules and import conversion rules
-import rpy2.robjects as robjects
-from rpy2.robjects import pandas2ri
-from rpy2.robjects.conversion import localconverter
-
-# Build our combined converter
-custom_converter = robjects.default_converter + pandas2ri.converter
-
-# Load the bridge and assign it to the GLOBAL variable 'nhanes'
-try:
-    # Use localconverter() for rpy2 v3.5.1 compatibility
-    with localconverter(custom_converter) as cv:
-        nhanes = init_r_bridge()
-    st.success("🎉 R-to-Python Bridge Connected Successfully!")
-except Exception as e:
-    st.error(f"❌ Failed to load R bridge: {e}")
-    st.stop()
-
+    
 # -------------------------------------------------------------
 # 2. Interactive Test (Query Table Metadata with CDC Fallback)
 # -------------------------------------------------------------
