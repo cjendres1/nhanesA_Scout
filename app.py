@@ -300,66 +300,67 @@ if selected_tables:
     st.write("**Your Final Data Package List:**")
     st.code(", ".join(final_download_list))
     
-    # Generate the Easy Python Retrieval Code
+# Generate the Easy Python Retrieval Code
     st.write("#### 🐍 Step 3: Copy Code to Python")
     st.write("Because the CDC servers limit Streamlit web-scraping speed, use this optimized snippet to load these files directly into your local Python environment:")
     
-    # Generate copy-pasteable script utilizing a precise cycle dictionary map
+    # We escape code braces with {{ }} so they print cleanly in st.code without execution conflicts
     python_snippet = f"""import pandas as pd
 import urllib.request
 import traceback
 
 # List of NHANES tables identified via NHANES Scout
-tables_to_load = ['SPX_E', 'SPX_F', 'SPX_G', 'DEMO_E', 'DEMO_F', 'DEMO_G']
+tables_to_load = {final_download_list}
 
 def fetch_nhanes_tables(table_list):
-    cycle_map = {
+    cycle_map = {{
         '_A': '1999-2000', '_B': '2001-2002', '_C': '2003-2004', 
         '_D': '2005-2006', '_E': '2007-2008', '_F': '2009-2010', 
         '_G': '2011-2012', '_H': '2013-2014', '_I': '2015-2016', 
         '_J': '2017-2018', '_K': '2019-2020', '_L': '2021-2023',
         '_M': '2023-2024'
-    }
+    }}
     
-    datasets = {}
+    datasets = {{}}
     for table in table_list:
-        print("\n" + "="*50)
-        print(f"📋 TARGET TABLE: {table}")
+        print("\\n" + "="*50)
+        print(f"📋 TARGET TABLE: {{table}}")
         
         # Determine the target cycle folder
         suffix = next((s for s in cycle_map if table.endswith(s)), None)
         cycle_folder = cycle_map[suffix] if suffix else '1999-2000'
         
         # Build primary and alternative urls using lower case '.xpt'
-        url_primary = f"https://wwwn.cdc.gov/Nchs/Nhanes/{cycle_folder}/{table}.xpt"
-        url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{table}.xpt"
+        url_primary = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{cycle_folder}}/{{table}}.xpt"
+        url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{{table}}.xpt"
         
         success = False
         for path_type, url in [("Primary Path", url_primary), ("Alternative Path", url_alt)]:
-            print(f"   🔍 Checking {path_type}: {url}")
+            print(f"    🔍 Checking {{path_type}}: {{url}}")
             try:
                 # HTTP Preflight Diagnostic check to inspect headers before loading
                 req = urllib.request.Request(url, method='HEAD')
                 with urllib.request.urlopen(req) as response:
                     content_type = response.headers.get('Content-Type', '')
-                    print(f"   📡 Server Response Code: {response.status}")
-                    print(f"   📄 Content Type Returned: '{content_type}'")
+                    print(f"    📡 Server Response Code: {{response.status}}")
+                    print(f"    📄 Content Type Returned: '{{content_type}}'")
                 
                 # Attempt to parse data stream
                 datasets[table] = pd.read_sas(url)
-                print(f"   ✅ SUCCESS: Loaded {len(datasets[table])} rows.")
+                print(f"    ✅ SUCCESS: Loaded {{len(datasets[table])}} rows.")
                 success = True
                 break  # Skip alternative path if primary works
                 
             except Exception as e:
-                print(f"   ⚠️ Blocked on {path_type}!")
-                print(f"      Error Details: {str(e).strip()}")
+                print(f"    ⚠️ Blocked on {{path_type}}!")
+                print(f"       Error Details: {{str(e).strip()}}")
                 
         if not success:
-            print(f"❌ CRITICAL: Could not fetch {table} from either path.")
+            print(f"❌ CRITICAL: Could not fetch {{table}} from either path.")
             
     return datasets
 
 nhanes_data = fetch_nhanes_tables(tables_to_load)
 """
     st.code(python_snippet, language="python")
+    
