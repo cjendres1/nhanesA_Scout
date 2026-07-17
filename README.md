@@ -1,4 +1,4 @@
-This streamlit app [NHANES Scout](https://nhanes-scout.streamlit.app)
+This streamlit app [https://nhanes-scout.streamlit.app](https://nhanes-scout.streamlit.app)
 allows the user to search for NHANES tables and generate python code to import the selected tables.
 
 USAGE:
