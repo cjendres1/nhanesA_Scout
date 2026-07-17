@@ -9,7 +9,16 @@ from scipy.sparse import load_npz
 st.set_page_config(page_title="NHANES Scout", page_icon="🔎", layout="wide")
 st.title("🔎 NHANES Scout")
 st.caption("Locate any NHANES tables based on search terms, bundle demographics, and generate Python loading code.")
-
+# Quick Guide (Tucked cleanly in a collapsible expander)
+with st.expander("📖 Quick Start Guide", expanded=True):
+    st.markdown("""
+    **Complete these 3 steps to generate custom Python code to download your NHANES data:**
+    
+    1. 🔍 **Step 1: Enter Search Terms** – Type keywords (e.g., *blood pressure, mercury*) in the search box to scan NHANES variable metadata.
+    2. 📋 **Step 2: Select NHANES Tables** – Use the multiselect box above the results table to choose which tables you want to bundle.
+    3. 🐍 **Step 3: Generate Python Snippet** – Scroll down to copy the custom Python code to fetch and load your chosen tables instantly.
+    """)
+    
 # -------------------------------------------------------------
 # 1. High-Performance Caching Loaders
 # -------------------------------------------------------------
