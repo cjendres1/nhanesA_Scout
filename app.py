@@ -18,7 +18,7 @@ with st.expander("📖 Quick Start Guide", expanded=True):
     2. 📋 **Step 2: Select NHANES Tables** – Use the multiselect box above the results table to choose which tables you want to bundle.
     3. 🐍 **Step 3: Generate Python Snippet** – Scroll down to copy the custom Python code to fetch and load your chosen tables instantly.
     """)
-    
+
 # -------------------------------------------------------------
 # 1. High-Performance Caching Loaders
 # -------------------------------------------------------------
@@ -300,31 +300,55 @@ if selected_tables:
     st.write("**Your Final Data Package List:**")
     st.code(", ".join(final_download_list))
     
+    # Generate the Easy Python Retrieval Code
     st.write("#### 🐍 Step 3: Copy Code to Python")
     st.write("Because the CDC servers limit Streamlit web-scraping speed, use this optimized snippet to load these files directly into your local Python environment:")
     
+    # Generate copy-pasteable script utilizing a precise cycle dictionary map
     python_snippet = f"""import pandas as pd
 
 # List of NHANES tables identified via NHANES Scout
 tables_to_load = {final_download_list}
 
 def fetch_nhanes_tables(table_list):
+    # Map the table suffix letter to the exact CDC release cycle folder
+    cycle_map = {{
+        '_A': '1999-2000', '_B': '2001-2002', '_C': '2003-2004', 
+        '_D': '2005-2006', '_E': '2007-2008', '_F': '2009-2010', 
+        '_G': '2011-2012', '_H': '2013-2014', '_I': '2015-2016', 
+        '_J': '2017-2018', '_K': '2019-2020', '_L': '2021-2023',
+        '_M': '2023-2024'
+    }}
+    
     datasets = {{}}
     for table in table_list:
         print(f"Downloading table: {{table}}...")
-        url = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{table[:4]}}/{{table}}.XPT"
+        
+        # Identify cycle from the suffix (e.g., '_E')
+        suffix = next((s for s in cycle_map if table.endswith(s)), None)
+        
+        if suffix:
+            cycle_folder = cycle_map[suffix]
+            url = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{cycle_folder}}/{{table}}.XPT"
+        else:
+            # Fallback for base cycle tables (1999-2000 often has no suffix, e.g., 'DEMO')
+            url = f"https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/{{table}}.XPT"
+            
         try:
             datasets[table] = pd.read_sas(url)
             print(f" -> Loaded {{len(datasets[table])}} rows.")
         except Exception as e:
             try:
+                # Secondary alternative folder structure fallback for specific exceptions
                 url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{{table}}.XPT"
                 datasets[table] = pd.read_sas(url_alt)
                 print(f" -> Loaded {{len(datasets[table])}} rows (alternative path).")
             except Exception as alt_err:
-                print(f" ❌ Error fetching {{table}}: {{alt_err}}")
+                print(f" ❌ Error fetching {{table}}: {{e}}")
     return datasets
 
+# Fetch all selected tables instantly
 nhanes_data = fetch_nhanes_tables(tables_to_load)
 """
     st.code(python_snippet, language="python")
+    
