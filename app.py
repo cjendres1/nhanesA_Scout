@@ -329,10 +329,10 @@ def fetch_nhanes_tables(table_list):
         
         if suffix:
             cycle_folder = cycle_map[suffix]
-            url = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{cycle_folder}}/{{table}}.XPT"
+            url = f"https://wwwn.cdc.gov/Nchs/Nhanes/{{cycle_folder}}/{{table}}.xpt"
         else:
             # Fallback for base cycle tables (1999-2000 often has no suffix, e.g., 'DEMO')
-            url = f"https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/{{table}}.XPT"
+            url = f"https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/{{table}}.xpt"
             
         try:
             datasets[table] = pd.read_sas(url)
@@ -340,7 +340,7 @@ def fetch_nhanes_tables(table_list):
         except Exception as e:
             try:
                 # Secondary alternative folder structure fallback for specific exceptions
-                url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{{table}}.XPT"
+                url_alt = f"https://wwwn.cdc.gov/Nchs/Nhanes/Demographics/{{table}}.xpt"
                 datasets[table] = pd.read_sas(url_alt)
                 print(f" -> Loaded {{len(datasets[table])}} rows (alternative path).")
             except Exception as alt_err:
@@ -351,4 +351,3 @@ def fetch_nhanes_tables(table_list):
 nhanes_data = fetch_nhanes_tables(tables_to_load)
 """
     st.code(python_snippet, language="python")
-    
